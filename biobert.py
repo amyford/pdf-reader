@@ -1,24 +1,25 @@
 import os
 from flask import Flask, request, jsonify
 import pdfplumber
-from transformers import BertTokenizer, BertForTokenClassification
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
 
+# Initialize the Flask app
 app = Flask(__name__)
 
-model_name = "allenai/scibert_scivocab_uncased"
-# model_name = "fran-martinez/scibert_scivocab_cased_ner_jnlpba"
-tokenizer = BertTokenizer.from_pretrained(model_name)
-model = BertForTokenClassification.from_pretrained(model_name) 
+# Load BioBERT model and tokenizer
+model_name = "dmis-lab/biobert-base-cased-v1.1"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForTokenClassification.from_pretrained(model_name)
 
-ner_pipeline = pipeline("ner", model=model, tokenizer=tokenizer)
+# Create NER pipeline
+ner_pipeline = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
 
-
+# Function to extract text from a PDF using pdfplumber
 def extract_text_from_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         text = ''
         for page in pdf.pages:
-            text += page.extract_text()
+            text += page.extract_text() or ''  # Handle case where text extraction might return None
     return text
 
 # Function to split the text into chunks using tokenizer's max length
@@ -26,54 +27,56 @@ def split_text_into_chunks(text, tokenizer, max_length=512):
     tokens = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=max_length)
     input_ids = tokens['input_ids'].squeeze(0).tolist()  # Convert tensor to list of token ids
     
+    # Split tokens into chunks of max_length
     chunks = []
-    for i in range(0, len(input_ids), max_length - 2):  # [CLS] and [SEP] tokens
+    for i in range(0, len(input_ids), max_length - 2):  # Account for [CLS] and [SEP] tokens
         chunk = input_ids[i:i + max_length - 2]
+        # Add [CLS] and [SEP] tokens
         chunk = [tokenizer.cls_token_id] + chunk + [tokenizer.sep_token_id]
         chunks.append(chunk)
     
     return chunks
-    
+
+# Function to merge subword tokens into complete entities
 def merge_subword_tokens(ner_results):
     merged_entities = []
-    current_entity = ""
-    for token in ner_results:
-        word = token["word"]
-        # If it's a continuation token (starts with ##), append to current entity
-        if word.startswith("##"):
-            current_entity += word[2:]  # Remove the ##
+    previous_entity = None
+    for entity in ner_results:
+        if entity['entity_group'] == previous_entity:
+            # Merge with the previous entity
+            merged_entities[-1]['word'] += " " + entity['word']
+            merged_entities[-1]['score'] = max(merged_entities[-1]['score'], entity['score'])
         else:
-            if current_entity:  # If there's an existing entity, append it
-                merged_entities.append(current_entity)
-            current_entity = word  # Start new entity
-        
-    # Append the last entity
-    if current_entity:
-        merged_entities.append(current_entity)
-
+            # Start a new entity
+            merged_entities.append(entity)
+        previous_entity = entity['entity_group']
     return merged_entities
 
-
-# Function to perform NER using SciBERT on tokenized text chunks
+# Function to perform NER using BioBERT on tokenized text chunks
 def perform_ner(text):
     # Tokenize and split text into chunks that fit the model's token limit
     chunks = split_text_into_chunks(text, tokenizer)
 
     entities = []
     for chunk in chunks:
+        # Decode the chunk back to string for NER processing
         chunk_text = tokenizer.decode(chunk, skip_special_tokens=True)
 
         try:
             ner_results = ner_pipeline(chunk_text)
             merged_entities = merge_subword_tokens(ner_results)
+
+            for entity in merged_entities:
+                entities.append({
+                    "entity": entity["entity_group"],
+                    "word": entity["word"],
+                    "score": float(entity["score"])  # Convert to Python float
+                })
         except Exception as e:
-            print("Error", e)
-        for entity in merged_entities:
-            # TODO - what to return
-            entities.append(entity)
+            print("Error during NER processing:", e)
     return entities
 
-
+# Route to upload a PDF and perform NER
 @app.route('/upload', methods=['POST'])
 def upload_pdf():
     if 'file' not in request.files:
@@ -89,7 +92,10 @@ def upload_pdf():
         pdf_path = os.path.join("/tmp", file.filename)
         file.save(pdf_path)
 
+        # Extract text from the PDF
         extracted_text = extract_text_from_pdf(pdf_path)
+
+        # Perform NER on the extracted text using BioBERT
         entities = perform_ner(extracted_text)
 
         # Clean up the temp file
@@ -99,7 +105,6 @@ def upload_pdf():
     else:
         return jsonify({"error": "File format not supported, please upload a PDF"}), 400
 
+# Run the app
 if __name__ == '__main__':
-    # app.run(debug=True)
-
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    app.run(debug=True)
