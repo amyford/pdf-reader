@@ -7,6 +7,7 @@ from transformers import pipeline
 app = Flask(__name__)
 
 model_name = "allenai/scibert_scivocab_uncased"
+# model_name = "fran-martinez/scibert_scivocab_cased_ner_jnlpba"
 tokenizer = BertTokenizer.from_pretrained(model_name)
 model = BertForTokenClassification.from_pretrained(model_name) 
 
