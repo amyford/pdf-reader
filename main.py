@@ -1,29 +1,45 @@
 import os
 from flask import Flask, request, jsonify
 import pdfplumber
-import spacy
+from gliner import GLiNER
 
-# Initialize the Flask app
 app = Flask(__name__)
 
-# Load the spaCy model for NER
-nlp = spacy.load("en_core_web_sm")
+model_name = "urchade/gliner_large_bio-v0.1"
+gliner_model = GLiNER.from_pretrained(model_name)
 
-# Function to extract text from a PDF using pdfplumber
+# TODO: Come back to labels
+labels = ["B-Disease", "I-Disease", "B-Chemical", "I-Chemical", "B-Protein", "I-Protein"] 
+
 def extract_text_from_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
         text = ''
         for page in pdf.pages:
-            text += page.extract_text()
+            text += page.extract_text() or ''  # Handle case where text extraction might return None
     return text
 
-# Function to perform NER on the extracted text
+
+def split_text_into_chunks(text, max_length=512):
+    chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+    return chunks
+
 def perform_ner(text):
-    doc = nlp(text)
-    entities = [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
+    chunks = split_text_into_chunks(text)
+    entities = []
+    
+    for chunk in chunks:
+        try:
+            ner_results = gliner_model.predict_entities(chunk, labels=labels)
+            for entity in ner_results:
+                entities.append({
+                    "entity": entity["text"],
+                    "label": entity["label"],
+                })
+        except Exception as e:
+            print("Error during NER processing:", e)
     return entities
 
-# Route to upload a PDF and perform NER
+
 @app.route('/upload', methods=['POST'])
 def upload_pdf():
     if 'file' not in request.files:
@@ -39,24 +55,15 @@ def upload_pdf():
         pdf_path = os.path.join("/tmp", file.filename)
         file.save(pdf_path)
 
-        # Extract text from the PDF
         extracted_text = extract_text_from_pdf(pdf_path)
-
-        print("pdf_path", pdf_path)
-
-        
-
-        # # Perform NER on the extracted text
-        # entities = perform_ner(extracted_text)
+        entities = perform_ner(extracted_text)
 
         # Clean up the temp file
         os.remove(pdf_path)
 
-        return jsonify({"entities": "AAA"}), 200
-        # return jsonify({"entities": entities}), 200
+        return jsonify({"entities": entities}), 200
     else:
         return jsonify({"error": "File format not supported, please upload a PDF"}), 400
 
-# Run the app
 if __name__ == '__main__':
     app.run(debug=True)
