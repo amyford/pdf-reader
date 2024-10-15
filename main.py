@@ -30,17 +30,23 @@ def perform_ner(text):
     for chunk in chunks:
         try:
             ner_results = gliner_model.predict_entities(chunk, labels=labels)
+
             for entity in ner_results:
+                # TODO Start and end token not text
+                surrounding_text = text[(entity["start"] - 100): entity["end"] + 100]
                 entities.append({
                     "entity": entity["text"],
                     "label": entity["label"],
+                    "context": f"... {surrounding_text} ...",
+                    "start": entity["start"],
+                    "end": entity["end"],
                 })
         except Exception as e:
             print("Error during NER processing:", e)
     return entities
 
 
-@app.route('/upload', methods=['POST'])
+@app.route('/api/v1/extract', methods=['POST'])
 def upload_pdf():
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -63,7 +69,7 @@ def upload_pdf():
 
         return jsonify({"entities": entities}), 200
     else:
-        return jsonify({"error": "File format not supported, please upload a PDF"}), 400
+        return jsonify({"error": "File format not supported, please upload a PDF"}), 415
 
 if __name__ == '__main__':
     app.run(debug=True)
