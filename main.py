@@ -1,15 +1,58 @@
+import vertexai
+from vertexai.generative_models import GenerativeModel
 import os
 from flask import Flask, request, jsonify
 import pdfplumber
-from gliner import GLiNER
-
+import json
+from time import sleep
 app = Flask(__name__)
 
-model_name = "urchade/gliner_large_bio-v0.1"
-gliner_model = GLiNER.from_pretrained(model_name)
+vertexai.init(project="pdf-reader-438611", location="europe-west1")
 
-# TODO: Come back to labels
-labels = ["B-Disease", "I-Disease", "B-Chemical", "I-Chemical", "B-Protein", "I-Protein"] 
+instructions = """
+        Extract the biological entities from the text below.
+
+        Return the list of entities.
+
+        The output must be in JSON.
+
+        [{
+            "entity",
+            "context",
+            "start",
+            "end",
+        }]
+
+        Where:
+            "entity": Name of the identified medical entity,
+            "context": Text surrounding the entity for clarity. Make sure to keep whole words. This should be as it is in the text"
+            "start": The start position of the entity in the context with respect to the original text,
+            "end": The end position of the entity in the context with respect to the original text,
+
+        For example
+        {"entities": [
+            {
+                "entity": "COVID-19",
+                "context": "... was observed in patients with COVID-19",
+                "start": 119,
+                "end": 140
+            },
+            {
+                "entity": "ERK1",
+                "context": "... elevated levels of ERK1 were seen in patients with COVID-19",
+                "start": 119,
+                "end": 140
+            }
+        ]}
+
+"""
+
+model = GenerativeModel(
+    model_name="gemini-1.5-flash-002", 
+
+    generation_config={"response_mime_type": "application/json"},
+    system_instruction=instructions
+    )
 
 def extract_text_from_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
@@ -24,27 +67,25 @@ def split_text_into_chunks(text, max_length=512):
     return chunks
 
 def perform_ner(text):
+    entities =[]
     chunks = split_text_into_chunks(text)
-    entities = []
-    
-    for chunk in chunks:
-        try:
-            ner_results = gliner_model.predict_entities(chunk, labels=labels)
 
-            for entity in ner_results:
-                # TODO Start and end token not text
-                surrounding_text = text[(entity["start"] - 100): entity["end"] + 100]
-                entities.append({
-                    "entity": entity["text"],
-                    "label": entity["label"],
-                    "context": f"... {surrounding_text} ...",
-                    "start": entity["start"],
-                    "end": entity["end"],
-                })
+    for chunk in chunks[0:5]:
+
+        try: 
+            response = model.generate_content(chunk)
+            entities_in_chunk = json.loads(response.text)
+            print(entities_in_chunk)
+            entities = [*entities, *entities_in_chunk["entities"]]
+
+            print(entities)
         except Exception as e:
-            print("Error during NER processing:", e)
-    return entities
+            print("Error extracting entities", e)
 
+        # Hit Gemini limit on free plan!
+        sleep(2)
+    
+    return entities
 
 @app.route('/api/v1/extract', methods=['POST'])
 def upload_pdf():
