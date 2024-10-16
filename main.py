@@ -7,6 +7,7 @@ import json
 from time import sleep
 app = Flask(__name__)
 
+# NB: if running locally may need to add an api_key
 vertexai.init(project="pdf-reader-438611", location="europe-west1")
 
 instructions = """
@@ -52,7 +53,7 @@ model = GenerativeModel(
 
     generation_config={"response_mime_type": "application/json"},
     system_instruction=instructions
-    )
+)
 
 def extract_text_from_pdf(pdf_path):
     with pdfplumber.open(pdf_path) as pdf:
@@ -71,7 +72,6 @@ def perform_ner(text):
     chunks = split_text_into_chunks(text)
 
     for chunk in chunks[0:5]:
-
         try: 
             response = model.generate_content(chunk)
             entities_in_chunk = json.loads(response.text)
@@ -82,8 +82,8 @@ def perform_ner(text):
         except Exception as e:
             print("Error extracting entities", e)
 
-        # Hit Gemini limit on free plan!
-        sleep(2)
+        # Hit Gemini limit on free plan! - sleep between requests
+        sleep(1)
     
     return entities
 
@@ -98,7 +98,6 @@ def upload_pdf():
         return jsonify({"error": "No selected file"}), 400
 
     if file and file.filename.endswith('.pdf'):
-        # Save the uploaded PDF temporarily
         pdf_path = os.path.join("/tmp", file.filename)
         file.save(pdf_path)
 
