@@ -1,10 +1,12 @@
-import vertexai
-from vertexai.generative_models import GenerativeModel
+import json
 import os
+from time import sleep
+
 from flask import Flask, request, jsonify
 import pdfplumber
-import json
-from time import sleep
+import vertexai
+from vertexai.generative_models import GenerativeModel
+
 app = Flask(__name__)
 
 # NB: if running locally may need to add an api_key
@@ -12,7 +14,6 @@ vertexai.init(project="pdf-reader-438611", location="europe-west1")
 
 instructions = """
         Extract the biological entities from the text below.
-
         Return the list of entities.
 
         The output must be in JSON.
@@ -45,59 +46,87 @@ instructions = """
                 "end": 140
             }
         ]}
-
 """
 
 model = GenerativeModel(
-    model_name="gemini-1.5-flash-002", 
-
+    model_name="gemini-1.5-flash-002",
     generation_config={"response_mime_type": "application/json"},
-    system_instruction=instructions
+    system_instruction=instructions,
 )
 
-def extract_text_from_pdf(pdf_path):
+
+def extract_text_from_pdf(pdf_path: str) -> str:
+    """
+    Extracts text from a PDF file using pdfplumber.
+
+    Args:
+        pdf_path (str): The file path to the PDF.
+
+    Returns:
+        text (str): The extracted text from the PDF.
+    """
     with pdfplumber.open(pdf_path) as pdf:
-        text = ''
+        text = ""
         for page in pdf.pages:
-            text += page.extract_text() or ''  # Handle case where text extraction might return None
+            text += (
+                page.extract_text() or ""
+            )  # Handle case where text extraction might return None
     return text
 
 
-def split_text_into_chunks(text, max_length=512):
-    chunks = [text[i:i+max_length] for i in range(0, len(text), max_length)]
+def split_text_into_chunks(text: str, max_length: int = 512) -> list:
+    """
+    Splits text into smaller chunks, each of a specified maximum length.
+
+    Args:
+        text (str): The input text to be split.
+        max_length (int): Maximum length for each chunk of text.
+
+    Returns:
+        list: A list of text chunks.
+    """
+    chunks = [text[i : i + max_length] for i in range(0, len(text), max_length)]
     return chunks
 
-def perform_ner(text):
-    entities =[]
+
+def perform_ner(text: str) -> list:
+    """
+    Performs NER on the input text using the Vertex AI model.
+
+    Args:
+        text (str): The input text for which NER will be performed.
+
+    Returns:
+        list[Entity]: A list of entities extracted from the text.
+    """
+    entities = []
     chunks = split_text_into_chunks(text)
 
     for chunk in chunks[0:5]:
-        try: 
+        try:
             response = model.generate_content(chunk)
             entities_in_chunk = json.loads(response.text)
-            print(entities_in_chunk)
             entities = [*entities, *entities_in_chunk["entities"]]
-
-            print(entities)
         except Exception as e:
             print("Error extracting entities", e)
 
         # Hit Gemini limit on free plan! - sleep between requests
         sleep(1)
-    
+
     return entities
 
-@app.route('/api/v1/extract', methods=['POST'])
+
+@app.route("/api/v1/extract", methods=["POST"])
 def upload_pdf():
-    if 'file' not in request.files:
+    if "file" not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
-    file = request.files['file']
-    
-    if file.filename == '':
+
+    file = request.files["file"]
+
+    if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
 
-    if file and file.filename.endswith('.pdf'):
+    if file and file.filename.endswith(".pdf"):
         pdf_path = os.path.join("/tmp", file.filename)
         file.save(pdf_path)
 
@@ -111,5 +140,6 @@ def upload_pdf():
     else:
         return jsonify({"error": "File format not supported, please upload a PDF"}), 415
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     app.run(debug=True)
