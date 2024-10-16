@@ -70,7 +70,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         for page in pdf.pages:
             text += (
                 page.extract_text() or ""
-            )  # Handle case where text extraction might return None
+            )
     return text
 
 
@@ -102,7 +102,7 @@ def perform_ner(text: str) -> list:
     entities = []
     chunks = split_text_into_chunks(text)
 
-    for chunk in chunks[0:5]:
+    for chunk in chunks:
         try:
             response = model.generate_content(chunk)
             entities_in_chunk = json.loads(response.text)
